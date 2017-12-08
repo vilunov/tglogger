@@ -2,18 +2,28 @@ import java.io.{File, FileOutputStream}
 import java.nio.file.{Files, Paths}
 
 import com.github.badoualy.telegram.api.{Kotlogram, TelegramApp, TelegramClient}
+import com.github.badoualy.telegram.tl.api._
 import com.github.badoualy.telegram.tl.api.auth.TLAuthorization
 import com.github.badoualy.telegram.tl.exception.RpcErrorException
+import com.github.badoualy.telegram.tl.core.TLIntVector
 
-import Vars._
+import Vars.TgClient._
 
 object Main {
   def main(args: Array[String]): Unit = {
+    DBHandler.connect()
     loadSession()
+
     val app = new TelegramApp(ApiId, ApiHash, SessionName, "1", "1", "en")
-    val client = Kotlogram.getDefaultClient(app, Session)
-    auth(client)
-    saveSession()
+    implicit val client: TelegramClient = Kotlogram.getDefaultClient(app, Session)
+    auth
+
+    extractChannels foreach { chan =>
+      println(s"${chan.getTitle}")
+
+    }
+
+    client.close()
   }
 
   /**
@@ -43,7 +53,7 @@ object Main {
     *
     * @param client client instance
     */
-  def auth(client: TelegramClient): Unit = {
+  def auth(implicit client: TelegramClient): Unit = {
     import scala.io.StdIn.readLine
 
     if (Session.key.isDefined) return
@@ -69,5 +79,23 @@ object Main {
 
     val self = auth.getUser.getAsUser
     println(s"You are signed in as ${self.getFirstName} ${self.getLastName}")
+    saveSession()
+  }
+
+  /**
+    * Get all available channels
+    *
+    * @param client logged in client
+    * @return iterator of channels
+    */
+  def extractChannels(implicit client: TelegramClient): Iterator[TLChannel] = {
+    import scala.collection.JavaConverters._
+
+    val chats = client.messagesGetAllChats(new TLIntVector)
+
+    for {
+      c: TLAbsChat <- chats.getChats.iterator().asScala if c.isInstanceOf[TLChannel]
+      chan = c.asInstanceOf[TLChannel] if !chan.getMegagroup
+    } yield chan
   }
 }
