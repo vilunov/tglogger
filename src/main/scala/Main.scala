@@ -11,6 +11,12 @@ import Vars.TgClient._
 
 object Main {
   def main(args: Array[String]): Unit = {
+    if (args.length == 1 && args(0) == "init") {
+      DBHandler.connect()
+      DBHandler.initSchema()
+      System.exit(0)
+    }
+
     DBHandler.connect()
     loadSession()
 
@@ -18,9 +24,12 @@ object Main {
     implicit val client: TelegramClient = Kotlogram.getDefaultClient(app, Session)
     auth
 
-    extractChannels foreach { chan =>
-      println(s"${chan.getTitle}")
+    val chans = getChannels
+    DBHandler.addChannels(chans.iterator)
 
+    chans foreach { chan =>
+      val messages = getMessages(chan)
+      DBHandler.addMessages(messages.toIterator.collect { case m: TLMessage => m })
     }
 
     client.close()
@@ -86,16 +95,30 @@ object Main {
     * Get all available channels
     *
     * @param client logged in client
-    * @return iterator of channels
+    * @return sequence of all subscribed channels
     */
-  def extractChannels(implicit client: TelegramClient): Iterator[TLChannel] = {
-    import scala.collection.JavaConverters._
+  def getChannels(implicit client: TelegramClient): Seq[TLChannel] =
+    client.messagesGetAllChats(new TLIntVector).getChats.toArray().toSeq
+      .collect { case m: TLChannel if !m.getMegagroup => m }
 
-    val chats = client.messagesGetAllChats(new TLIntVector)
+  /**
+    * Get messages from a channel
+    *
+    * @param chan channel to query messages from
+    * @param minId the returned messages will be limited by this value (i.e. their ids will not be lower than `minId`)
+    * @param maxId upper bound of returned messages' ids
+    * @param limit maximum number of returned messages (limited by 100)
+    * @param client logged in client
+    * @return sequence of messages
+    */
+  def getMessages(chan: TLInputPeerChannel, minId: Int = 0, maxId: Int = 100, limit: Int = 100)
+                 (implicit client: TelegramClient): Seq[TLAbsMessage] =
+    client.messagesGetHistory(chan, 0, 0, 0, limit min 100, maxId, minId).getMessages.toArray().toSeq
+      .collect { case m: TLAbsMessage => m }
 
-    for {
-      c: TLAbsChat <- chats.getChats.iterator().asScala if c.isInstanceOf[TLChannel]
-      chan = c.asInstanceOf[TLChannel] if !chan.getMegagroup
-    } yield chan
-  }
+  private implicit def toInputPeer(chan: TLChannel): TLInputPeerChannel =
+    new TLInputPeerChannel(chan.getId, chan.getAccessHash)
+
+  private implicit def toAbsChannel(chan: TLChannel): TLAbsInputChannel =
+    new TLInputChannel(chan.getId, chan.getAccessHash)
 }
