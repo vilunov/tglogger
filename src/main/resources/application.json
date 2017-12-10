@@ -1,0 +1,14 @@
+{
+  "telegram": {
+    "api_id": 0,
+    "api_hash": "",
+    "session_name": "tglogger",
+    "session_file_path": "session"
+  },
+  "database": {
+    "db": "tglogger",
+    "user": "tglogger",
+    "password": "",
+    "hostname": "localhost"
+  }
+}
