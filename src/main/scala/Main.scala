@@ -1,22 +1,38 @@
 object Main {
   def main(args: Array[String]): Unit = {
-    DBHandler.connect()
     if (args.length == 1) {
       args(0) match {
-        case "init" =>
-          DBHandler.initSchema()
-          System.exit(0)
-        case "chans" =>
-          DBHandler.getPubChannels.foreach(println(_))
+        case "init" => init()
+        case "list-chans" => list_chans()
       }
-      System.exit(0)
-    }
+    } else default()
+  }
+
+  def default(): Unit = {
+    DBHandler.connect()
 
     implicit val session: TgSession = new TgSession
     SessionLoader.loadSession()
-    implicit val handler: TgHandler = new TgHandler(session)
-    handler.updateChannels()
+    implicit val tg: TgHandler = new TgHandler(session)
+    tg.updateChannels()
 
-    handler.close()
+    DBHandler.addChannels(tg.getChannels)
+
+    val pubChans = DBHandler.getPubChannels
+    pubChans foreach { chan =>
+      TgPoller.updateMessages(chan)
+    }
+
+    tg.close()
+  }
+
+  def init(): Unit = {
+    DBHandler.connect()
+    DBHandler.initSchema()
+  }
+
+  def list_chans(): Unit = {
+    DBHandler.connect()
+    DBHandler.getPubChannels.foreach(println(_))
   }
 }

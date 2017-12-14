@@ -12,7 +12,7 @@ import TgHandler._
 class TgHandler(val session: TgSession) {
   val app = new TelegramApp(ApiId, ApiHash, SessionName, "1", "1", "en")
   val client: TelegramClient = Kotlogram.getDefaultClient(app, session)
-  private val chans: mutable.HashMap[Int, TLChannel] = mutable.HashMap()
+  val chans: mutable.HashMap[Int, TLChannel] = mutable.HashMap()
 
   /**
     * If needed, ask user for login inputs and authenticate them
@@ -51,13 +51,11 @@ class TgHandler(val session: TgSession) {
   def updateChannels(): Unit = {
     val channels = client.messagesGetAllChats(new TLIntVector).getChats.toArray().toSeq
       .collect { case m: TLChannel if !m.getMegagroup => m }
-    channels foreach { chan =>
-      chans.put(chan.getId, chan)
-    }
+    chans ++= channels.map { chan => chan.getId -> chan }
   }
 
-  def getChannels: Iterable[Int] =
-    chans.keys
+  def getChannels: Iterator[TLChannel] =
+    chans.valuesIterator
 
   /**
     * Get messages from a channel

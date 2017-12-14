@@ -12,31 +12,36 @@ object DBHandler {
   def initSchema(): Unit = {
     DB autoCommit { implicit session =>
       sql"""CREATE TABLE channels (
-            id INTEGER PRIMARY KEY,
+            id INTEGER NOT NULL,
             title TEXT NOT NULL,
             username TEXT NULL,
-            pub BOOLEAN NOT NULL DEFAULT false);""".update().apply()
+            pub BOOLEAN NOT NULL DEFAULT false,
+            available BOOLEAN NOT NULL DEFAULT true,
+            CONSTRAINT channels_pk PRIMARY KEY (id));""".update().apply()
 
       sql"""CREATE TABLE messages (
             id INTEGER NOT NULL,
             channel_id INTEGER NOT NULL,
             msg_time TIMESTAMP NOT NULL,
             msg_body TEXT NULL,
-            CONSTRAINT messages_pkey PRIMARY KEY (id, channel_id, msg_time));""".update().apply()
+            CONSTRAINT messages_pk PRIMARY KEY (id, channel_id, msg_time));""".update().apply()
 
-      sql"""CREATE TABLE deleted_messages (
+      sql"""CREATE TABLE messages_deleted (
             id INTEGER NOT NULL,
             channel_id INTEGER NOT NULL,
-            CONSTRAINT deleted_messages_pkey PRIMARY KEY (id, channel_id));""".update().apply()
+            deletion_time TIMESTAMP NULL,
+            CONSTRAINT messages_deleted_pk PRIMARY KEY (id, channel_id));""".update().apply()
     }
   }
 
   def addChannels(chans: Iterator[TLChannel]): Unit = {
     DB autoCommit { implicit session =>
+      sql"UPDATE channels SET available = false;".update().apply()
       for (chan <- chans)
         sql"""INSERT INTO channels(id, title, username)
               VALUES(${chan.getId}, ${chan.getTitle}, ${chan.getUsername})
-              ON CONFLICT DO NOTHING;""".update().apply()
+              ON CONFLICT ON CONSTRAINT channels_pk DO UPDATE SET
+              available = true, title = EXCLUDED.title, username = EXCLUDED.username;""".update().apply()
     }
   }
 
@@ -56,7 +61,7 @@ object DBHandler {
     }
   }
 
-  def getPubChannels: List[Int] = {
+  def getPubChannels: Seq[Int] = {
     DB readOnly { implicit session =>
       sql"SELECT id FROM channels WHERE pub;".map(_.int("id")).list().apply()
     }
