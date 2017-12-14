@@ -1,33 +1,37 @@
-import java.nio.ByteBuffer
-
-import com.github.badoualy.telegram.api.TelegramApiStorage
-import com.github.badoualy.telegram.mtproto.auth.AuthKey
-import com.github.badoualy.telegram.mtproto.model.{DataCenter, MTSession}
-
 import scala.collection.mutable.ArrayBuffer
+import java.io.{File, FileOutputStream}
+import java.nio.ByteBuffer
+import java.nio.file.{Files, Paths}
 
-object Session extends TelegramApiStorage with Serializable {
-  var key: Option[AuthKey] = None
-  var dc: Option[DataCenter] = None
-  var session: Option[MTSession] = None
+import com.github.badoualy.telegram.mtproto.auth.AuthKey
+import com.github.badoualy.telegram.mtproto.model.DataCenter
 
-  override def loadAuthKey(): AuthKey = key.orNull
+import Vars.TgClient.SessionFilePath
 
-  override def loadDc(): DataCenter = dc.orNull
+object SessionLoader {
+  /**
+    * Reads the file with session information
+    */
+  def loadSession()(implicit session: TgSession): Unit = {
+    if (new File(SessionFilePath).exists()) {
+      val s = Files.readAllBytes(Paths.get(SessionFilePath))
+      deserialize(s)
+    }
+  }
 
-  override def loadSession(): MTSession = session.orNull
+  /**
+    * Saves the session information into the file
+    */
+  def saveSession()(implicit session: TgSession): Unit = {
+    val fos = new FileOutputStream(SessionFilePath)
+    try {
+      fos.write(serialize().toArray)
+    } finally {
+      fos.close()
+    }
+  }
 
-  override def deleteAuthKey(): Unit = key = None
-
-  override def deleteDc(): Unit = dc = None
-
-  override def saveAuthKey(key: AuthKey): Unit = this.key = Option(key)
-
-  override def saveDc(dc: DataCenter): Unit = this.dc = Option(dc)
-
-  override def saveSession(session: MTSession): Unit = this.session = Option(session)
-
-  def serialize(): Seq[Byte] = {
+  def serialize()(implicit session: TgSession): Seq[Byte] = {
     /*
       Serialized fields into a sequence of bytes
        1 byte for flags (key/dc/session present)
@@ -36,19 +40,19 @@ object Session extends TelegramApiStorage with Serializable {
        if dc present:
         4 bytes for the port, 4 bytes for the addr length = n, n bytes for the addr
      */
-    val flags = ((if (key.isDefined) 1 else 0) |
-      (if (dc.isDefined) 1 << 1 else 0) |
-      (if (session.isDefined) 1 << 2 else 0)).toByte
+    val flags = ((if (session.key.isDefined) 1 else 0) |
+      (if (session.dc.isDefined) 1 << 1 else 0) |
+      (if (session.session.isDefined) 1 << 2 else 0)).toByte
     var output: ArrayBuffer[Byte] = ArrayBuffer(flags)
 
-    key match {
+    session.key match {
       case Some(k) =>
         val bytes = k.getKey
         output ++= ByteBuffer.allocate(4 + bytes.length).putInt(bytes.length).put(bytes).array()
       case None =>
     }
 
-    dc match {
+    session.dc match {
       case Some(k) =>
         val bytes = k.getIp.getBytes()
         output ++= ByteBuffer.allocate(8 + bytes.length).putInt(k.getPort).putInt(bytes.length).put(bytes).array()
@@ -64,7 +68,7 @@ object Session extends TelegramApiStorage with Serializable {
     * @param bytes sequence of bytes returned previously by the `serialize` method
     * @return true on success, false on failure
     */
-  def deserialize(bytes: Seq[Byte]): Boolean = {
+  def deserialize(bytes: Seq[Byte])(implicit session: TgSession): Boolean = {
     if (bytes.isEmpty) return false
     var input = bytes
 
@@ -97,8 +101,8 @@ object Session extends TelegramApiStorage with Serializable {
       Option(new DataCenter(ip, port))
     } else None
 
-    this.key = key
-    this.dc = dc
+    session.key = key
+    session.dc = dc
     true
   }
 }

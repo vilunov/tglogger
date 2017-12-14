@@ -1,5 +1,6 @@
 import scalikejdbc._
 import com.github.badoualy.telegram.tl.api.{TLChannel, TLMessage, TLPeerChannel}
+
 import Vars.DB._
 
 object DBHandler {
@@ -19,8 +20,14 @@ object DBHandler {
       sql"""CREATE TABLE messages (
             id INTEGER NOT NULL,
             channel_id INTEGER NOT NULL,
-            message TEXT NULL,
-            CONSTRAINT text_messages_pkey PRIMARY KEY (id, channel_id));""".update().apply()
+            msg_time TIMESTAMP NOT NULL,
+            msg_body TEXT NULL,
+            CONSTRAINT messages_pkey PRIMARY KEY (id, channel_id, msg_time));""".update().apply()
+
+      sql"""CREATE TABLE deleted_messages (
+            id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            CONSTRAINT deleted_messages_pkey PRIMARY KEY (id, channel_id));""".update().apply()
     }
   }
 
@@ -36,12 +43,22 @@ object DBHandler {
   def addMessages(messages: Iterator[TLMessage]): Unit = {
     DB autoCommit { implicit session =>
       for (msg <- messages) {
+        val msgId = msg.getId
+        val chanId = msg.getToId.asInstanceOf[TLPeerChannel].getChannelId
+        val date = Option(msg.getEditDate).getOrElse(msg.getDate)
         var text = msg.getMessage
         if (text.isEmpty) text = null
-        sql"""INSERT INTO messages(id, channel_id, message)
-              VALUES(${msg.getId}, ${msg.getToId.asInstanceOf[TLPeerChannel].getChannelId}, ${text})
-             |ON CONFLICT DO NOTHING;""".update().apply()
+
+        sql"""INSERT INTO messages(id, channel_id, msg_time, msg_body)
+              VALUES($msgId, $chanId, to_timestamp($date), $text)
+              ON CONFLICT DO NOTHING;""".update().apply()
       }
+    }
+  }
+
+  def getPubChannels: List[Int] = {
+    DB readOnly { implicit session =>
+      sql"SELECT id FROM channels WHERE pub;".map(_.int("id")).list().apply()
     }
   }
 }
