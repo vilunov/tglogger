@@ -4,9 +4,10 @@ import akka.http.scaladsl.Http.ServerBinding
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.stream.ActorMaterializer
-import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
 import akka.http.scaladsl.marshalling.{PredefinedToEntityMarshallers, ToResponseMarshallable}
+import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport.sprayJsValueMarshaller
 import spray.json._
+import spray.json.DefaultJsonProtocol._
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
@@ -32,8 +33,7 @@ object Main extends App {
   }
   val route: Route =
     get {
-      val chans: Seq[Int] = DBHandler.getPubChannels
-      complete(chans)
+      complete(DBHandler.getPubChannels.toJson)
     }
 
   val bf: Future[ServerBinding] = Http().bindAndHandle(route, "localhost", 8080)
