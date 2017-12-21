@@ -1,13 +1,15 @@
+package tglogger
+
 import akka.actor.{ActorRef, ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.Http.ServerBinding
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.stream.ActorMaterializer
-import akka.http.scaladsl.marshalling.{PredefinedToEntityMarshallers, ToResponseMarshallable}
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport.sprayJsValueMarshaller
 import spray.json._
 import spray.json.DefaultJsonProtocol._
+import tglogger.db.DBHandler
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
@@ -25,12 +27,6 @@ object Main extends App {
   implicit val system: ActorSystem = ActorSystem("tglogger")
   implicit val materializer: ActorMaterializer = ActorMaterializer()
   implicit val execContext: ExecutionContextExecutor = system.dispatcher
-  if (true) {
-    val chans: Array[Byte] = Array(1, 2, 3)
-    val m = PredefinedToEntityMarshallers.ByteArrayMarshaller
-    val f = m.apply(chans)
-    println(m)
-  }
   val route: Route =
     get {
       complete(DBHandler.getPubChannels.toJson)

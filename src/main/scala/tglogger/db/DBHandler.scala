@@ -1,8 +1,10 @@
+package tglogger.db
+
 import scalikejdbc._
 import scalikejdbc.async._
 import scalikejdbc.async.FutureImplicits._
 import com.github.badoualy.telegram.tl.api.{TLChannel, TLMessage, TLPeerChannel}
-import Vars.DB._
+import tglogger.Vars.DB._
 
 import scala.concurrent.Future
 

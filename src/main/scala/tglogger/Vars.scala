@@ -1,3 +1,5 @@
+package tglogger
+
 import com.typesafe.config._
 
 object Vars {

@@ -1,3 +1,5 @@
+package tglogger
+
 import scala.collection.mutable.ArrayBuffer
 import java.io.{File, FileOutputStream}
 import java.nio.ByteBuffer

@@ -1,3 +1,5 @@
+package tglogger
+
 import scala.collection.mutable
 
 import akka.actor.Actor

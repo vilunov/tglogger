@@ -1,3 +1,5 @@
+package tglogger
+
 import com.github.badoualy.telegram.api.TelegramApiStorage
 import com.github.badoualy.telegram.mtproto.auth.AuthKey
 import com.github.badoualy.telegram.mtproto.model.{DataCenter, MTSession}
