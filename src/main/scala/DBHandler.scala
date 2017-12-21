@@ -1,16 +1,18 @@
 import scalikejdbc._
+import scalikejdbc.async._
+import scalikejdbc.async.FutureImplicits._
 import com.github.badoualy.telegram.tl.api.{TLChannel, TLMessage, TLPeerChannel}
-
 import Vars.DB._
+
+import scala.concurrent.Future
 
 object DBHandler {
   def connect(): Unit = {
-    val settings = ConnectionPoolSettings(initialSize = 1, maxSize = 3, connectionTimeoutMillis = 3000L)
-    ConnectionPool.singleton(ConnStr, User, Password, settings)
+    AsyncConnectionPool.singleton(ConnStr, User, Password)
   }
 
-  def initSchema(): Unit = {
-    DB autoCommit { implicit session =>
+  def initSchema(): Future[Unit] = {
+    AsyncDB.localTx { implicit session =>
       sql"""CREATE TABLE channels (
             id INTEGER NOT NULL,
             title TEXT NOT NULL,
@@ -31,6 +33,8 @@ object DBHandler {
             channel_id INTEGER NOT NULL,
             deletion_time TIMESTAMP NULL,
             CONSTRAINT messages_deleted_pk PRIMARY KEY (id, channel_id));""".update().apply()
+
+      Future.unit
     }
   }
 
@@ -63,7 +67,7 @@ object DBHandler {
 
   def getPubChannels: Seq[Int] = {
     DB readOnly { implicit session =>
-      sql"SELECT id FROM channels WHERE pub;".map(_.int("id")).list().apply()
+      sql"SELECT id FROM channels WHERE pub AND available;".map(_.int("id")).list().apply()
     }
   }
 }

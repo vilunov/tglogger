@@ -1,5 +1,7 @@
 import scala.collection.mutable
 
+import akka.actor.Actor
+
 import com.github.badoualy.telegram.api.{Kotlogram, TelegramApp, TelegramClient}
 import com.github.badoualy.telegram.tl.api.auth.TLAuthorization
 import com.github.badoualy.telegram.tl.api._
@@ -9,7 +11,7 @@ import com.github.badoualy.telegram.tl.core.TLIntVector
 import Vars.TgClient._
 import TgHandler._
 
-class TgHandler(val session: TgSession) {
+class TgHandler(val session: TgSession) extends Actor {
   val app = new TelegramApp(ApiId, ApiHash, SessionName, "1", "1", "en")
   val client: TelegramClient = Kotlogram.getDefaultClient(app, session)
   val chans: mutable.HashMap[Int, TLChannel] = mutable.HashMap()
@@ -69,6 +71,15 @@ class TgHandler(val session: TgSession) {
   def getMessages(chanId: Int, minId: Int = 0, maxId: Int = 0, limit: Int = 100): Seq[TLAbsMessage] =
     client.messagesGetHistory(chans(chanId), 0, 0, 0, limit min 100, maxId, minId).getMessages.toArray().toSeq
       .collect { case m: TLAbsMessage => m }
+
+  override def receive: Receive = {
+    case MsgTgClose =>
+      client.close()
+    case MsgTgUpdateChannels =>
+      updateChannels()
+    case MsgTgGetMessages(chanId, startId) =>
+      getMessages(chanId, startId, startId + 100);
+  }
 }
 
 object TgHandler {
@@ -77,7 +88,9 @@ object TgHandler {
 
   implicit def toAbsChannel(chan: TLChannel): TLAbsInputChannel =
     new TLInputChannel(chan.getId, chan.getAccessHash)
-
-  implicit def toClient(handler: TgHandler): TelegramClient =
-    handler.client
 }
+
+sealed trait MsgTg
+case object MsgTgClose extends MsgTg
+case object MsgTgUpdateChannels extends MsgTg
+final case class MsgTgGetMessages(chanId: Int, startId: Int) extends MsgTg
