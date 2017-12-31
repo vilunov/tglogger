@@ -9,7 +9,7 @@ resolvers += "jitpack" at "https://jitpack.io"
 libraryDependencies ++= Seq(
   "com.github.badoualy" %  "kotlogram"   % "1.0.0-RC3",
   "org.scalikejdbc"     %% "scalikejdbc-async" % "0.9.0",
-  "org.postgresql"      %  "postgresql"  % "42.1.4",
+  "com.github.mauricio" %% "postgresql-async" % "0.2.21",
   "com.typesafe"        %  "config"      % "1.3.1",
 
   "com.typesafe.akka" %% "akka-actor"    % "2.5.7",

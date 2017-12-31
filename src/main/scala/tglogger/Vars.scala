@@ -17,6 +17,6 @@ object Vars {
     val User: String     = config.getString("database.user")
     val Password: String = config.getString("database.password")
     val Host: String     = config.getString("database.hostname")
-    val ConnStr = s"jdbc:postgresql://$Host/$DBName?user=$User"
+    val ConnStr = s"jdbc:postgresql://$Host/$DBName"
   }
 }

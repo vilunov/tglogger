@@ -18,12 +18,14 @@ object Schema {
             channel_id INTEGER NOT NULL,
             msg_time TIMESTAMP NOT NULL,
             msg_body TEXT NULL,
-            CONSTRAINT messages_pk PRIMARY KEY (id, channel_id, msg_time));""",
+            CONSTRAINT messages_pk PRIMARY KEY (id, channel_id, msg_time),
+            CONSTRAINT channel_fk FOREIGN KEY (channel_id) REFERENCES channels(id));""",
     sql"""CREATE TABLE messages_deleted (
             id INTEGER NOT NULL,
             channel_id INTEGER NOT NULL,
             deletion_time TIMESTAMP NULL,
-            CONSTRAINT messages_deleted_pk PRIMARY KEY (id, channel_id));"""
+            CONSTRAINT messages_deleted_pk PRIMARY KEY (id, channel_id),
+            CONSTRAINT channel_fk FOREIGN KEY (channel_id) REFERENCES channels(id));"""
   )
 
   def initSchema(): Unit = {

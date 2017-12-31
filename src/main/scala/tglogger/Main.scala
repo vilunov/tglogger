@@ -1,18 +1,20 @@
 package tglogger
 
+import scala.concurrent.{ExecutionContextExecutor, Future}
+
 import akka.actor.{ActorRef, ActorSystem, Props}
+import akka.stream.ActorMaterializer
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.Http.ServerBinding
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
-import akka.stream.ActorMaterializer
 import akka.http.scaladsl.marshalling.Marshaller._
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport.sprayJsValueMarshaller
 import spray.json._
 import spray.json.DefaultJsonProtocol._
+
 import tglogger.db.DBHandler
 
-import scala.concurrent.{ExecutionContextExecutor, Future}
 
 object Main extends App {
   if (args.length == 1) {
@@ -40,7 +42,6 @@ object Main extends App {
   SessionLoader.loadSession()
   val tgHandler: ActorRef = system.actorOf(Props(new TgHandler(session)), "tgHandler")
   tgHandler ! MsgTgUpdateChannels
-  tgHandler ! MsgTgClose
 
   def list_chans(): Unit = {
     DBHandler.connect()
