@@ -10,6 +10,10 @@ object Vars {
     val ApiHash: String         = config.getString("telegram.api_hash")
     val SessionName: String     = config.getString("telegram.session_name")
     val SessionFilePath: String = config.getString("telegram.session_file_path")
+    val DownloadMedia: Boolean  = try config.getBoolean("telegram.download_media")
+      catch {
+        case _: ConfigException.Missing => false
+      }
   }
 
   object DB {

@@ -42,6 +42,7 @@ object Main extends App {
   SessionLoader.loadSession()
   val tgHandler: ActorRef = system.actorOf(Props(new TgHandler(session)), "tgHandler")
   tgHandler ! MsgTgUpdateChannels
+  tgHandler ! MsgTgGetAllMessages
 
   def list_chans(): Unit = {
     DBHandler.connect()

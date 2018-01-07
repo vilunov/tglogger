@@ -1,13 +1,14 @@
 package tglogger
 
+import scala.util.Success
 import scala.concurrent._
 import scala.collection.mutable
+import scala.annotation.tailrec
 
-import akka.actor.Actor
+import akka.actor.{Actor, ActorRef, Props}
 
-import com.github.badoualy.telegram.api.{Kotlogram, TelegramApp, TelegramClient, UpdateCallback}
-import com.github.badoualy.telegram.tl.api.auth.TLAuthorization
-import com.github.badoualy.telegram.tl.api._
+import com.github.badoualy.telegram.api._
+import com.github.badoualy.telegram.tl.api._, auth.TLAuthorization
 import com.github.badoualy.telegram.tl.exception.RpcErrorException
 import com.github.badoualy.telegram.tl.core.TLIntVector
 
@@ -15,9 +16,19 @@ import tglogger.Vars.TgClient._
 import tglogger.db.DBHandler
 import tglogger.TgHandler._
 
-class TgHandler(val session: TgSession) extends Actor with UpdateCallback {
+/**
+  * Actor responsible for communicating with Telegram servers.
+  * Maintains one account connection.
+  *
+  * @param session session parameters
+  */
+class TgHandler(val session: TgSession = new TgSession()) extends Actor with UpdateCallback {
   val app = new TelegramApp(ApiId, ApiHash, SessionName, "1", "1", "en")
   val client: TelegramClient = Kotlogram.getDefaultClient(app, session, Kotlogram.PROD_DC4, this)
+
+  val mediaDownloader: Option[ActorRef] =
+    if (DownloadMedia) Some(context.actorOf(Props(new TgMediaDownloader(client.getDownloaderClient))))
+    else None
   val chans: mutable.HashMap[Int, TLChannel] = mutable.HashMap()
   var lastRequest: Long = 0
   private implicit def dispatcher: ExecutionContextExecutor = context.dispatcher
@@ -74,9 +85,18 @@ class TgHandler(val session: TgSession) extends Actor with UpdateCallback {
     * @param limit maximum number of returned messages (limited by 100)
     * @return sequence of messages
     */
-  def getMessages(chanId: Int, minId: Int = 0, maxId: Int = 0, limit: Int = 100): Seq[TLAbsMessage] =
-    client.messagesGetHistory(chans(chanId), 0, 0, 0, limit min 100, maxId, minId).getMessages
-      .toArray.collect { case m: TLAbsMessage => m}
+  @tailrec final def getMessages(chanId: Int, minId: Int = 0, maxId: Int = 0, limit: Int = 100, offset: Int = 0, tries: Int = 3): Seq[TLAbsMessage] = {
+    try client.messagesGetHistory(chans(chanId), 0, 0, offset, limit min 100, maxId, minId).getMessages
+      .toArray.collect { case m: TLAbsMessage => m }
+    catch {
+      case e: RpcErrorException if tries <= 0 => throw e
+      case e: RpcErrorException =>
+        println(s"Thrown RpcErrorException in getMessages\n" +
+          s"(chanId = $chanId, minId = $minId, maxId = $maxId, limit = $limit, offset = $offset, tries = $tries)")
+        e.printStackTrace()
+        getMessages(chanId, minId, maxId, limit, offset, tries - 1);
+    }
+  }
 
   /**
     * We need to do this because Telegram limits the number of requests.
@@ -104,14 +124,19 @@ class TgHandler(val session: TgSession) extends Actor with UpdateCallback {
       DBHandler.addChannels(chans.values.iterator)(context.dispatcher)
     case MsgTgGetAllMessages =>
       waitCooldown()
-      chans.keysIterator.foreach(self ! MsgTgGetMessages(_, 1))
-    case MsgTgGetMessages(chanId, startId) =>
+      DBHandler.getPubChannels.onComplete {
+        case Success(list) =>
+          list.foreach(self ! MsgTgGetMessages(_, 0))
+        case _ =>
+      }
+    case MsgTgGetMessages(chanId, offset) =>
       if(chans.contains(chanId)) {
         waitCooldown()
-        val msgs = getMessages(chanId, startId)
+        val msgs = getMessages(chanId, offset = offset).collect { case m: TLMessage => m }
+         mediaDownloader.foreach(a => msgs.foreach(m => a ! (m.getMedia, chanId, m.getId)))
         DBHandler.addMessages(msgs.iterator)(context.dispatcher)
         if (msgs.nonEmpty)
-          self ! MsgTgGetMessages(chanId, msgs.last.getId + 1)
+          self ! MsgTgGetMessages(chanId, offset + msgs.length)
       }
   }
 
@@ -126,10 +151,12 @@ class TgHandler(val session: TgSession) extends Actor with UpdateCallback {
 
   override def onShortChatMessage(client: TelegramClient, message: TLUpdateShortChatMessage): Unit = {
     println(message)
+    println(message.getMessage)
   }
 
   override def onShortMessage(client: TelegramClient, message: TLUpdateShortMessage): Unit = {
     println(message)
+    println(message.getMessage)
   }
 
   override def onShortSentMessage(client: TelegramClient, message: TLUpdateShortSentMessage): Unit = {
@@ -139,10 +166,30 @@ class TgHandler(val session: TgSession) extends Actor with UpdateCallback {
   override def onUpdateTooLong(client: TelegramClient): Unit = {}
 
   def handleUpdate(update: TLAbsUpdate): Unit = update match {
-    case m: TLUpdateNewMessage =>
-      DBHandler.addMessage(m.getMessage)
     case m: TLUpdateNewChannelMessage =>
-      DBHandler.addMessage(m.getMessage)
+      m.getMessage match {
+        case msg: TLMessage =>
+          msg.getToId match {
+            case chan: TLPeerChannel if chans.contains(chan.getChannelId) =>
+              mediaDownloader.foreach(_ ! (msg.getMedia, chan.getChannelId, msg.getId))
+              DBHandler.addMessage(msg)
+            case _ =>
+          }
+        case _ =>
+      }
+    case m: TLUpdateEditMessage =>
+      m.getMessage match {
+        case msg: TLMessage =>
+          msg.getToId match {
+            case chan: TLPeerChannel if chans.contains(chan.getChannelId) =>
+              mediaDownloader.foreach(_ ! (msg.getMedia, chan.getChannelId, msg.getId))
+              DBHandler.addMessage(msg)
+            case _ =>
+          }
+        case _ =>
+      }
+    case m: TLUpdateDeleteChannelMessages =>
+      DBHandler.removeMessages(m.getChannelId, m.getMessages.toIntArray.filter(chans.contains).iterator)
     case _ =>
   }
 }
@@ -156,31 +203,26 @@ object TgHandler {
 }
 
 /**
-  * Parent trait for messages passed to TgHandler
-  */
-sealed trait MsgTg
-
-/**
   * Close the connection and all Telegram client's threads.
   */
-case object MsgTgClose extends MsgTg
+case object MsgTgClose
 
 /**
   * Update the channel list and insert it into the DB.
   */
-case object MsgTgUpdateChannels extends MsgTg
+case object MsgTgUpdateChannels
 
 /**
   * Retrieve all channels' messages starting from the server and insert them into the DB.
   */
-case object MsgTgGetAllMessages extends MsgTg
+case object MsgTgGetAllMessages
 
 /**
   * Retrieve up to 100 channel's messages from the server and insert them into the DB.
   *
   * @param chanId channel's id
-  * @param startId the id of the first message (must be >= 1)
+  * @param offset the offset from the last message (must be >= 0)
   */
-final case class MsgTgGetMessages(chanId: Int, startId: Int) extends MsgTg {
-  require(startId >= 1, "startId has to be bigger or equal to 1")
+case class MsgTgGetMessages(chanId: Int, offset: Int) {
+  require(offset >= 0, "offset has to be bigger or equal to 0")
 }
