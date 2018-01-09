@@ -51,7 +51,7 @@ object DBHandler {
           available = true, title = EXCLUDED.title, username = EXCLUDED.username;""".update().future().map(_ => ())
 
   /**
-    * Inserts a message metadata into the `messages` relation and current message contents into the `message_history` relation.
+    * Inserts message data into the database.
     *
     * @param msg Telegram message
     * @param session
@@ -74,19 +74,13 @@ object DBHandler {
     val replyMsgId = Option(msg.getReplyToMsgId)
     val viaBotId = Option(msg.getViaBotId)
 
-    val fwdHeader = Option(msg.getFwdFrom)
-    val fwdUserId = fwdHeader.map(_.getFromId)
-    val fwdChanId = fwdHeader.map(_.getChannelId)
-    val fwdMsgId = fwdHeader.map(_.getChannelPost)
-
+    // 1. Insert the message metadata
     sql"""INSERT INTO messages(id, channel_id, msg_time, media_downloaded,
-            from_user_id, reply_msg_id, via_bot_id,
-            fwd_user_id, fwd_channel_id, fwd_message_id)
+            from_user_id, reply_msg_id, via_bot_id)
           VALUES($msgId, $chanId, to_timestamp($date), $mediaDownloaded,
-            $fromUserId, $replyMsgId, $viaBotId,
-            $fwdUserId, $fwdChanId, $fwdMsgId)
+            $fromUserId, $replyMsgId, $viaBotId)
           ON CONFLICT DO NOTHING;""".update().future().flatMap { _ =>
-
+      // 2. Insert message text (or media caption) into the history relation
       val text = msg.getMedia match {
         case m: TLMessageMediaPhoto => m.getCaption
         case m: TLMessageMediaDocument => m.getCaption
@@ -94,17 +88,44 @@ object DBHandler {
       }
       val time = Option(msg.getEditDate).getOrElse(msg.getDate)
 
-      if (text != null && !text.isEmpty) {
+      val futureMsg = if (text != null && !text.isEmpty) {
         sql"""INSERT INTO message_history(id, channel_id, msg_time, msg_body)
-            VALUES($msgId, $chanId, to_timestamp($time), $text)
-            ON CONFLICT DO NOTHING;""".update().future().map(_ => ())
+              VALUES($msgId, $chanId, to_timestamp($time), $text)
+              ON CONFLICT DO NOTHING;""".update().future().map(_ => ())
       } else Future.unit
+
+      // 3. Insert forward data (if the message was a forward)
+      val futureFwd = msg.getFwdFrom match {
+        case fwdHeader: TLMessageFwdHeader =>
+          val fwdUserId = fwdHeader.getFromId
+          val fwdChanId = fwdHeader.getChannelId
+          val fwdMsgId = fwdHeader.getChannelPost
+          sql"""INSERT INTO forwards(id, channel_id, fwd_user_id, fwd_channel_id, fwd_message_id)
+                VALUES($msgId, $chanId, $fwdUserId, $fwdChanId, $fwdMsgId)
+                ON CONFLICT DO NOTHING;""".update().future()
+        case _ => Future.unit
+      }
+
+      val futureMedia = msg.getMedia match {
+        case m: TLMessageMediaDocument =>
+          val doc = m.getDocument.getAsDocument
+          if (doc != null) {
+            val name = doc.getAttributes.toArray().collectFirst { case at: TLDocumentAttributeFilename => at }.map(_.getFileName)
+            sql"INSERT INTO documents(id, channel_id, media_id, name) VALUES($msgId, $chanId, ${doc.getId}, $name) ON CONFLICT DO NOTHING;".update().future()
+          } else Future.unit
+        case m: TLMessageMediaPhoto =>
+          val photo = m.getPhoto.getAsPhoto
+          if (photo != null)
+            sql"INSERT INTO photos(id, channel_id, media_id) VALUES($msgId, $chanId, ${photo.getId}) ON CONFLICT DO NOTHING;".update().future()
+          else Future.unit
+      }
+
+      Future.sequence(Seq(futureMsg, futureFwd, futureMedia)).map(_ => ())
     }
   }
 
-  def getPubChannels(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[List[Int]] = {
+  def getPubChannels(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[List[Int]] =
     sql"SELECT id FROM channels WHERE pub AND available;".map(_.int("id"))
-  }
 
   def isMediaDownloaded(msgId: Int, chanId: Int)
                        (implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[Option[Boolean]] =

@@ -15,7 +15,6 @@ import spray.json.DefaultJsonProtocol._
 
 import tglogger.db.DBHandler
 
-
 object Main extends App {
   if (args.length == 1) {
     args(0) match {

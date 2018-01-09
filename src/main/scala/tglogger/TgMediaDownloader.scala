@@ -1,22 +1,24 @@
 package tglogger
 
-import scala.util.Success
 import scala.concurrent.ExecutionContextExecutor
-import java.io.FileOutputStream
+import java.io.{File, FileOutputStream, IOException}
 import java.nio.file.{Path, Paths}
 
 import akka.actor.Actor
 import com.github.badoualy.telegram.api.TelegramClient
-import com.github.badoualy.telegram.api.utils.TLMediaUtilsKt
+import com.github.badoualy.telegram.api.utils.{MediaInput, TLMediaUtilsKt}
 import com.github.badoualy.telegram.tl.api._
+import com.github.badoualy.telegram.tl.exception.RpcErrorException
 
-import tglogger.db.DBHandler
-
-class TgMediaDownloader(val client: TelegramClient, val dir: Path = Paths.get(".")) extends Actor {
-  var lastRequest: Long = 0
+/**
+  * Actor for downloading media files. Saves them by their IDs into the specified directory.
+  *
+  * @param client client for downloading
+  * @param dir directory to download files into
+  */
+class TgMediaDownloader(private val client: TelegramClient, private val dir: Path = Paths.get(".", "files")) extends Actor {
+  private var lastRequest: Long = 0
   dir.toFile.mkdirs()
-  dir.resolve("photos").toFile.mkdir()
-  dir.resolve("files").toFile.mkdir()
 
   private def waitCooldown(): Unit = {
     val cooldown: Long = 1000
@@ -26,50 +28,41 @@ class TgMediaDownloader(val client: TelegramClient, val dir: Path = Paths.get(".
     lastRequest = currentTime
   }
 
-
   override def receive: Receive = {
-    /*
-     * Case for downloading photos. Downloads into file "photos/<chan-id>/<msg-id>"
-     */
-    case (media: TLMessageMediaPhoto, chanId: Int, msgId: Int) =>
+    // Case for downloading photos.
+    case media: TLMessageMediaPhoto =>
       implicit val ec: ExecutionContextExecutor = context.dispatcher
-      val file = dir.resolve(Paths.get("photos", chanId.toString, msgId.toString)).toFile
-      DBHandler.isMediaDownloaded(msgId, chanId).onComplete {
-        case Success(Some(false)) =>
-          val mediaInput = TLMediaUtilsKt.getAbsMediaInput(media)
-          file.getParentFile.mkdir()
-          if(file.exists()) file.delete()
-          val stream = new FileOutputStream(file)
-          client.downloadSync(mediaInput.getInputFileLocation, mediaInput.getSize, stream)
-          DBHandler.setMediaDownloaded(msgId, chanId)
-          stream.close()
-        case _ =>
-      }
+      val file = dir.resolve(media.getPhoto.getId.toString).toFile
+      val mediaInput = TLMediaUtilsKt.getAbsMediaInput(media)
+      download(file, mediaInput)
 
-    /*
-     * Case for downloading files.
-     * If the file has a name, downloads into file "files/<chan-id>/<msg-id>-<filename>",
-     * If the file has no name (e.g. an attached video), downloads into file "files/<chan-id>/<msg-id>"
-     */
-    case (media: TLMessageMediaDocument, chanId: Int, msgId: Int) =>
+    // Case for downloading files.
+    case media: TLMessageMediaDocument =>
       implicit val ec: ExecutionContextExecutor = context.dispatcher
       media.getDocument match {
         case document: TLDocument =>
-          val filename = msgId.toString +
-            document.getAttributes.toArray().collectFirst { case at: TLDocumentAttributeFilename => at }
-              .map("-" + _.getFileName).getOrElse("")
-          val file = dir.resolve(Paths.get("files", chanId.toString, filename)).toFile
-          DBHandler.isMediaDownloaded(msgId, chanId).onComplete {
-            case Success(Some(false)) =>
-              val mediaInput = TLMediaUtilsKt.getAbsMediaInput(media)
-              file.getParentFile.mkdir()
-              if(file.exists()) file.delete()
-              val stream = new FileOutputStream(file)
-              client.downloadSync(mediaInput.getInputFileLocation, mediaInput.getSize, stream)
-              DBHandler.setMediaDownloaded(msgId, chanId)
-              stream.close()
-            case _ =>
-          }
+          val file = dir.resolve(document.getId.toString).toFile
+          val mediaInput: MediaInput = TLMediaUtilsKt.getAbsMediaInput(media)
+          download(file, mediaInput)
+        case _ =>
       }
+  }
+
+  private def download(file: File, mediaInput: MediaInput): Unit = {
+    if(!file.exists()) {
+      try {
+        val stream = new FileOutputStream(file)
+        waitCooldown()
+        client.downloadSync(mediaInput.getInputFileLocation, mediaInput.getSize, stream)
+        stream.close()
+      } catch {
+        case e: IOException =>
+          if (file.exists()) file.delete()
+          throw e
+        case e: RpcErrorException =>
+          if (file.exists()) file.delete()
+          throw e
+      }
+    }
   }
 }

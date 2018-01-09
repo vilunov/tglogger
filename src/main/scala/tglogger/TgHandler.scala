@@ -22,15 +22,15 @@ import tglogger.TgHandler._
   *
   * @param session session parameters
   */
-class TgHandler(val session: TgSession = new TgSession()) extends Actor with UpdateCallback {
-  val app = new TelegramApp(ApiId, ApiHash, SessionName, "1", "1", "en")
-  val client: TelegramClient = Kotlogram.getDefaultClient(app, session, Kotlogram.PROD_DC4, this)
+class TgHandler(private val session: TgSession = new TgSession()) extends Actor with UpdateCallback {
+  private val app = new TelegramApp(ApiId, ApiHash, SessionName, "1", "1", "en")
+  private val client: TelegramClient = Kotlogram.getDefaultClient(app, session, Kotlogram.PROD_DC4, this)
 
-  val mediaDownloader: Option[ActorRef] =
+  private val mediaDownloader: Option[ActorRef] =
     if (DownloadMedia) Some(context.actorOf(Props(new TgMediaDownloader(client.getDownloaderClient))))
     else None
-  val chans: mutable.HashMap[Int, TLChannel] = mutable.HashMap()
-  var lastRequest: Long = 0
+  private val chans: mutable.HashMap[Int, TLChannel] = mutable.HashMap()
+  private var lastRequest: Long = 0
   private implicit def dispatcher: ExecutionContextExecutor = context.dispatcher
 
   /**
@@ -51,13 +51,12 @@ class TgHandler(val session: TgSession = new TgSession()) extends Actor with Upd
     val auth: TLAuthorization = try
       client.authSignIn(phone, sentCode.getPhoneCodeHash, code)
     catch {
-      case e: RpcErrorException if e.getTag == "SESSION_PASSWORD_NEEDED" => {
+      case e: RpcErrorException if e.getTag == "SESSION_PASSWORD_NEEDED" =>
         // Login failed due to two-step authorization
         // Ask user for password and try again
         print("Insert password: ")
         val pwd = readLine()
         client.authCheckPassword(pwd)
-      }
     }
 
     val self = auth.getUser.getAsUser
@@ -68,7 +67,7 @@ class TgHandler(val session: TgSession = new TgSession()) extends Actor with Upd
     * Update the list of available channels
     */
   def updateChannels(): Unit = {
-    val channels = client.messagesGetAllChats(new TLIntVector).getChats.toArray().toSeq
+     val channels = client.messagesGetAllChats(new TLIntVector).getChats.toArray().toSeq
       .collect { case m: TLChannel if !m.getMegagroup => m }
     chans ++= channels.map { chan => chan.getId -> chan }
   }
@@ -124,16 +123,12 @@ class TgHandler(val session: TgSession = new TgSession()) extends Actor with Upd
       DBHandler.addChannels(chans.values.iterator)(context.dispatcher)
     case MsgTgGetAllMessages =>
       waitCooldown()
-      DBHandler.getPubChannels.onComplete {
-        case Success(list) =>
-          list.foreach(self ! MsgTgGetMessages(_, 0))
-        case _ =>
-      }
+      chans.keysIterator.foreach(self ! MsgTgGetMessages(_, 0))
     case MsgTgGetMessages(chanId, offset) =>
       if(chans.contains(chanId)) {
         waitCooldown()
         val msgs = getMessages(chanId, offset = offset).collect { case m: TLMessage => m }
-         mediaDownloader.foreach(a => msgs.foreach(m => a ! (m.getMedia, chanId, m.getId)))
+         mediaDownloader.foreach(a => msgs.filter(_.getMedia != null).foreach(m => a ! m.getMedia))
         DBHandler.addMessages(msgs.iterator)(context.dispatcher)
         if (msgs.nonEmpty)
           self ! MsgTgGetMessages(chanId, offset + msgs.length)
@@ -165,7 +160,10 @@ class TgHandler(val session: TgSession = new TgSession()) extends Actor with Upd
 
   override def onUpdateTooLong(client: TelegramClient): Unit = {}
 
-  def handleUpdate(update: TLAbsUpdate): Unit = update match {
+  private def handleUpdate(update: TLAbsUpdate): Unit = update match {
+    /*
+     * New message in a channel or a supergroup
+     */
     case m: TLUpdateNewChannelMessage =>
       m.getMessage match {
         case msg: TLMessage =>
@@ -177,6 +175,9 @@ class TgHandler(val session: TgSession = new TgSession()) extends Actor with Upd
           }
         case _ =>
       }
+    /*
+     * A message has been edited (either in a channel, supergroup, group or a personal chat)
+     */
     case m: TLUpdateEditMessage =>
       m.getMessage match {
         case msg: TLMessage =>
@@ -188,6 +189,9 @@ class TgHandler(val session: TgSession = new TgSession()) extends Actor with Upd
           }
         case _ =>
       }
+    /*
+     * A message has been deleted from a channel or a supergroup
+     */
     case m: TLUpdateDeleteChannelMessages =>
       DBHandler.removeMessages(m.getChannelId, m.getMessages.toIntArray.filter(chans.contains).iterator)
     case _ =>
