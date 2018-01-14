@@ -2,6 +2,8 @@ name := "tglogger"
 version := "0.0"
 organization := "me.vilunov"
 
+mainClass := Some("tglogger.Main")
+
 scalaVersion := "2.12.4"
 
 resolvers += "jitpack" at "https://jitpack.io"

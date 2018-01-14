@@ -23,4 +23,9 @@ object Vars {
     val Host: String     = config.getString("database.hostname")
     val ConnStr = s"jdbc:postgresql://$Host/$DBName"
   }
+
+  object Http {
+    val Interface: String = config.getString("http.interface")
+    val Port: Int         = config.getInt("http.port")
+  }
 }

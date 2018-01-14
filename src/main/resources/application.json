@@ -3,12 +3,17 @@
     "api_id": 0,
     "api_hash": "",
     "session_name": "tglogger",
-    "session_file_path": "session"
+    "session_file_path": "session",
+    "download_media": false
   },
   "database": {
     "db": "tglogger",
     "user": "tglogger",
     "password": "",
     "hostname": "localhost"
+  },
+  "http": {
+    "interface": "localhost",
+    "port": 8080
   }
 }

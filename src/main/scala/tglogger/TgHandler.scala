@@ -1,11 +1,10 @@
 package tglogger
 
-import scala.util.Success
-import scala.concurrent._
+import scala.concurrent._, duration._
 import scala.collection.mutable
 import scala.annotation.tailrec
 
-import akka.actor.{Actor, ActorRef, Props}
+import akka.actor.{Actor, ActorRef, Props, Timers}
 
 import com.github.badoualy.telegram.api._
 import com.github.badoualy.telegram.tl.api._, auth.TLAuthorization
@@ -22,7 +21,7 @@ import tglogger.TgHandler._
   *
   * @param session session parameters
   */
-class TgHandler(private val session: TgSession = new TgSession()) extends Actor with UpdateCallback {
+class TgHandler(private val session: TgSession = new TgSession()) extends Actor with Timers with UpdateCallback {
   private val app = new TelegramApp(ApiId, ApiHash, SessionName, "1", "1", "en")
   private val client: TelegramClient = Kotlogram.getDefaultClient(app, session, Kotlogram.PROD_DC4, this)
 
@@ -30,7 +29,9 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
     if (DownloadMedia) Some(context.actorOf(Props(new TgMediaDownloader(client.getDownloaderClient))))
     else None
   private val chans: mutable.HashMap[Int, TLChannel] = mutable.HashMap()
-  private var lastRequest: Long = 0
+  private val tasks: mutable.Queue[TgTask] = mutable.Queue()
+  private var readyToSend: Boolean = true
+
   private implicit def dispatcher: ExecutionContextExecutor = context.dispatcher
 
   /**
@@ -97,42 +98,37 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
     }
   }
 
-  /**
-    * We need to do this because Telegram limits the number of requests.
-    * This method blocks the actor for some fixed time. This interval was chosen arbitrarily.
-    *
-    * It was tested that an interval of half a second eventually leads to temporary client ban,
-    * resulting in FLOOD_WAIT RPC exceptions.
-    *
-    * TODO: find out actual Telegram limits via trial and error
-    */
-  private def waitCooldown(): Unit = {
-    val cooldown: Long = 1000
-
-    val currentTime = System.currentTimeMillis()
-    if (currentTime - lastRequest < cooldown) Thread.sleep(cooldown - (currentTime - lastRequest))
-    lastRequest = currentTime
-  }
-
   override def receive: Receive = {
+    case task: TgTask =>
+      if(tasks.isEmpty && readyToSend) handleTask(task)
+      else tasks.enqueue(task)
     case MsgTgClose =>
       client.close()
-    case MsgTgUpdateChannels =>
-      waitCooldown()
-      updateChannels()
-      DBHandler.addChannels(chans.values.iterator)(context.dispatcher)
+      mediaDownloader.foreach(_ ! MsgTgClose)
+      context.stop(self)
     case MsgTgGetAllMessages =>
-      waitCooldown()
-      chans.keysIterator.foreach(self ! MsgTgGetMessages(_, 0))
-    case MsgTgGetMessages(chanId, offset) =>
-      if(chans.contains(chanId)) {
-        waitCooldown()
-        val msgs = getMessages(chanId, offset = offset).collect { case m: TLMessage => m }
-         mediaDownloader.foreach(a => msgs.filter(_.getMedia != null).foreach(m => a ! m.getMedia))
-        DBHandler.addMessages(msgs.iterator)(context.dispatcher)
-        if (msgs.nonEmpty)
-          self ! MsgTgGetMessages(chanId, offset + msgs.length)
-      }
+      tasks.enqueue(chans.keysIterator.map(MsgTgGetMessages(_, 0)).toSeq: _*)
+    case MsgTgReadyToRun =>
+      if(tasks.nonEmpty) handleTask(tasks.dequeue())
+      else readyToSend = true
+  }
+
+  private def handleTask(task: TgTask): Unit = {
+    readyToSend = false
+    task match {
+      case MsgTgUpdateChannels =>
+        updateChannels()
+        DBHandler.addChannels(chans.values.iterator)(context.dispatcher)
+        timers.startSingleTimer(CooldownTimerKey, MsgTgReadyToRun, 1 second)
+      case MsgTgGetMessages(chanId, offset) =>
+        if(chans.contains(chanId)) {
+          val msgs = getMessages(chanId, offset = offset).collect { case m: TLMessage => m }
+          timers.startSingleTimer(CooldownTimerKey, MsgTgReadyToRun, 1 second)
+          mediaDownloader.foreach { a => msgs.filter(_.getMedia != null).foreach(m => a ! m.getMedia) }
+          DBHandler.addMessages(msgs.iterator)(context.dispatcher)
+          if (msgs.nonEmpty) tasks.enqueue(MsgTgGetMessages(chanId, offset + msgs.length))
+        } else self ! MsgTgReadyToRun
+    }
   }
 
   override def onUpdates(client: TelegramClient, updates: TLUpdates): Unit =
@@ -144,19 +140,11 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
   override def onUpdateShort(client: TelegramClient, update: TLUpdateShort): Unit =
     handleUpdate(update.getUpdate)
 
-  override def onShortChatMessage(client: TelegramClient, message: TLUpdateShortChatMessage): Unit = {
-    println(message)
-    println(message.getMessage)
-  }
+  override def onShortChatMessage(client: TelegramClient, message: TLUpdateShortChatMessage): Unit = {}
 
-  override def onShortMessage(client: TelegramClient, message: TLUpdateShortMessage): Unit = {
-    println(message)
-    println(message.getMessage)
-  }
+  override def onShortMessage(client: TelegramClient, message: TLUpdateShortMessage): Unit = {}
 
-  override def onShortSentMessage(client: TelegramClient, message: TLUpdateShortSentMessage): Unit = {
-    println(message)
-  }
+  override def onShortSentMessage(client: TelegramClient, message: TLUpdateShortSentMessage): Unit = {}
 
   override def onUpdateTooLong(client: TelegramClient): Unit = {}
 
@@ -204,7 +192,15 @@ object TgHandler {
 
   implicit def toAbsChannel(chan: TLChannel): TLInputChannel =
     new TLInputChannel(chan.getId, chan.getAccessHash)
+
+  private case object CooldownTimerKey
+  private case object MsgTgReadyToRun
 }
+
+/**
+  * Tasks to be queued inside the actor which require sending requests to Telegram servers.
+  */
+sealed trait TgTask
 
 /**
   * Close the connection and all Telegram client's threads.
@@ -214,7 +210,7 @@ case object MsgTgClose
 /**
   * Update the channel list and insert it into the DB.
   */
-case object MsgTgUpdateChannels
+case object MsgTgUpdateChannels extends TgTask
 
 /**
   * Retrieve all channels' messages starting from the server and insert them into the DB.
@@ -227,6 +223,6 @@ case object MsgTgGetAllMessages
   * @param chanId channel's id
   * @param offset the offset from the last message (must be >= 0)
   */
-case class MsgTgGetMessages(chanId: Int, offset: Int) {
+case class MsgTgGetMessages(chanId: Int, offset: Int) extends TgTask {
   require(offset >= 0, "offset has to be bigger or equal to 0")
 }

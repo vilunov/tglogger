@@ -46,6 +46,10 @@ class TgMediaDownloader(private val client: TelegramClient, private val dir: Pat
           download(file, mediaInput)
         case _ =>
       }
+
+    case MsgTgClose =>
+      client.close()
+      context.stop(self)
   }
 
   private def download(file: File, mediaInput: MediaInput): Unit = {

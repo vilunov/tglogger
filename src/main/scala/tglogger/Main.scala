@@ -14,6 +14,7 @@ import spray.json._
 import spray.json.DefaultJsonProtocol._
 
 import tglogger.db.DBHandler
+import tglogger.Vars.Http._
 
 object Main extends App {
   if (args.length == 1) {
@@ -34,7 +35,7 @@ object Main extends App {
       complete(DBHandler.getPubChannels.map(_.toJson))
     }
 
-  val bf: Future[ServerBinding] = Http().bindAndHandle(route, "localhost", 8080)
+  val bf: Future[ServerBinding] = Http().bindAndHandle(route, Interface, Port)
 
   /// Init Telegram connection an client
   implicit val session: TgSession = new TgSession
