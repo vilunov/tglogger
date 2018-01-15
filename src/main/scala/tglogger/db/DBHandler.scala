@@ -1,6 +1,6 @@
 package tglogger.db
 
-import scala.concurrent._
+import scala.concurrent.{ExecutionContext, Future}
 
 import scalikejdbc._
 import scalikejdbc.async._
@@ -9,6 +9,7 @@ import scalikejdbc.async.FutureImplicits._
 import com.github.badoualy.telegram.tl.api._
 
 import tglogger.Vars.DB._
+import tglogger.entities._
 
 object DBHandler {
   def connect(): Unit = {
@@ -124,13 +125,24 @@ object DBHandler {
     }
   }
 
-  def getPubChannels(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[List[Int]] =
-    sql"SELECT id FROM channels WHERE pub AND available;".map(_.int("id"))
+  def getPubChannelsIds(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[List[Int]] =
+    sql"SELECT id FROM channels WHERE pub AND available;".map(_.int(1))
+
+  def getPubChannels(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[List[Channel]] =
+    sql"SELECT id, title, username FROM channels WHERE pub AND available ORDER BY id;"
+      .map { it => Channel(it.int(1), it.string(2), it.stringOpt(3)) }
+
+  def getMessages(channel: Int, fromId: Int)(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[List[Message]] =
+    sql"SELECT id, msg_body, msg_time FROM message_history WHERE channel_id = $channel AND id >= $fromId ORDER BY id, msg_time;"
+      .map { it => Message(it.int(1), it.string(2), it.timestamp(3).toInstant.getEpochSecond.intValue()) }
+
+  def isPubChannel(chanId: Int)
+                  (implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[Option[Boolean]] =
+    sql"SELECT pub FROM channels WHERE id = $chanId;".map(_.boolean(1))
 
   def isMediaDownloaded(msgId: Int, chanId: Int)
                        (implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[Option[Boolean]] =
-    sql"SELECT media_downloaded FROM messages WHERE id = $msgId AND channel_id = $chanId;"
-      .map(_.boolean("media_downloaded"))
+    sql"SELECT media_downloaded FROM messages WHERE id = $msgId AND channel_id = $chanId;".map(_.boolean(1))
 
   def setMediaDownloaded(msgId: Int, chanId: Int)
                         (implicit session: AsyncDBSession = AsyncDB.sharedSession, cxt: ExecutionContext): Future[Unit] =

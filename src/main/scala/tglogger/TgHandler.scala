@@ -181,7 +181,8 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
      * A message has been deleted from a channel or a supergroup
      */
     case m: TLUpdateDeleteChannelMessages =>
-      DBHandler.removeMessages(m.getChannelId, m.getMessages.toIntArray.filter(chans.contains).iterator)
+      if(chans.contains(m.getChannelId))
+        DBHandler.removeMessages(m.getChannelId, m.getMessages.toIntArray.iterator)
     case _ =>
   }
 }
