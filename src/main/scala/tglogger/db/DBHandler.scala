@@ -125,16 +125,28 @@ object DBHandler {
     }
   }
 
-  def getPubChannelsIds(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[List[Int]] =
+  def getPubChannelsIds(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[Seq[Int]] =
     sql"SELECT id FROM channels WHERE pub AND available;".map(_.int(1))
 
-  def getPubChannels(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[List[Channel]] =
+  def getPubChannels(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[Seq[Channel]] =
     sql"SELECT id, title, username FROM channels WHERE pub AND available ORDER BY id;"
       .map { it => Channel(it.int(1), it.string(2), it.stringOpt(3)) }
 
-  def getMessages(channel: Int, fromId: Int)(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[List[Message]] =
-    sql"SELECT id, msg_body, msg_time FROM message_history WHERE channel_id = $channel AND id >= $fromId ORDER BY id, msg_time;"
-      .map { it => Message(it.int(1), it.string(2), it.timestamp(3).toInstant.getEpochSecond.intValue()) }
+  def getMessages(channel: Int, fromId: Int = 1)
+                 (implicit session: AsyncDBSession = AsyncDB.sharedSession, cxt: ExecutionContext): Future[List[Message]] = {
+    val history: Future[List[(Int, Int, String)]] =
+      sql"SELECT id, msg_time, msg_body FROM message_history WHERE channel_id = $channel AND id >= $fromId ORDER BY id, msg_time;"
+        .map { it => (it.int(1), it.timestamp(2).toInstant.getEpochSecond.intValue(), it.string(3)) }.toList()
+    val messages: Future[List[(Int, Int, Option[Int], Option[Int], Option[Int])]] =
+      sql"SELECT id, msg_time, from_user_id, reply_msg_id, via_bot_id FROM messages WHERE channel_id = $channel AND id >= $fromId ORDER BY id, msg_time;"
+      .map { it => (it.int(1), it.timestamp(2).toInstant.getEpochSecond.intValue(), it.intOpt(3), it.intOpt(4), it.intOpt(5)) }.toList()
+    val history_grouped: Future[Map[Int, List[HistoryEntry]]] = history.map { it => it.groupBy(_._1).mapValues(_.map { it2 => HistoryEntry(it2._3, it2._2) }) }
+
+    for {
+      his <- history_grouped
+      msgs <- messages
+    } yield msgs.map { it => Message(it._1, if(his.contains(it._1)) his(it._1) else Seq(), it._2, it._3, it._4, it._5) }
+  }
 
   def isPubChannel(chanId: Int)
                   (implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[Option[Boolean]] =

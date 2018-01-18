@@ -33,7 +33,8 @@ object Main extends App {
   implicit val execContext: ExecutionContextExecutor = system.dispatcher
 
   implicit val channelFormat: RootJsonFormat[Channel] = jsonFormat3(Channel)
-  implicit val messageFormat: RootJsonFormat[Message] = jsonFormat3(Message)
+  implicit val historyEntryFormat: RootJsonFormat[HistoryEntry] = jsonFormat2(HistoryEntry)
+  implicit val messageFormat: RootJsonFormat[Message] = jsonFormat6(Message)
 
   val route: Route =
     get {
