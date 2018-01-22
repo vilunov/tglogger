@@ -1,6 +1,7 @@
 package tglogger
 
 import scala.concurrent._, duration._
+import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.annotation.tailrec
 
@@ -34,6 +35,7 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
 
   private implicit def dispatcher: ExecutionContextExecutor = context.dispatcher
 
+
   /**
     * If needed, ask user for login inputs and authenticate them
     */
@@ -64,15 +66,6 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
     println(s"You are signed in as ${self.getFirstName} ${self.getLastName}")
   }
 
-  /**
-    * Update the list of available channels
-    */
-  def updateChannels(): Unit = {
-     val channels = client.messagesGetAllChats(new TLIntVector).getChats.toArray().toSeq
-      .collect { case m: TLChannel if !m.getMegagroup => m }
-    chans ++= channels.map { chan => chan.getId -> chan }
-  }
-
   def getChannels: Iterator[TLChannel] =
     chans.valuesIterator
 
@@ -86,13 +79,16 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
     * @return sequence of messages
     */
   @tailrec final def getMessages(chanId: Int, minId: Int = 0, maxId: Int = 0, limit: Int = 100, offset: Int = 0, tries: Int = 3): Seq[TLAbsMessage] = {
-    try client.messagesGetHistory(chans(chanId), 0, 0, offset, limit min 100, maxId, minId).getMessages
-      .toArray.collect { case m: TLAbsMessage => m }
+    try {
+      val response = client.messagesGetHistory(chans(chanId), 0, 0, offset, limit min 100, maxId, minId)
+      DBHandler.addUsers(response.getUsers.iterator().asScala)
+      response.getMessages.toArray.collect { case m: TLAbsMessage => m }
+    }
     catch {
       case e: RpcErrorException if tries <= 0 => throw e
       case e: RpcErrorException =>
         println(s"Thrown RpcErrorException in getMessages\n" +
-          s"(chanId = $chanId, minId = $minId, maxId = $maxId, limit = $limit, offset = $offset, tries = $tries)")
+          s"(cha0Id = $chanId, minId = $minId, maxId = $maxId, limit = $limit, offset = $offset, tries = $tries)")
         e.printStackTrace()
         getMessages(chanId, minId, maxId, limit, offset, tries - 1);
     }
@@ -117,15 +113,18 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
     readyToSend = false
     task match {
       case MsgTgUpdateChannels =>
-        updateChannels()
-        DBHandler.addChannels(chans.values.iterator)(context.dispatcher)
+        // Retrieve the list of channels, add them to the local map and insert into the DB
+        val channels = client.messagesGetAllChats(new TLIntVector).getChats.toArray().toSeq
+          .collect { case m: TLChannel => m }
+        chans ++= channels.map { chan => chan.getId -> chan }
+        DBHandler.addChannels(chans.values.iterator)
         timers.startSingleTimer(CooldownTimerKey, MsgTgReadyToRun, 1 second)
       case MsgTgGetMessages(chanId, offset) =>
         if(chans.contains(chanId)) {
           val msgs = getMessages(chanId, offset = offset).collect { case m: TLMessage => m }
           timers.startSingleTimer(CooldownTimerKey, MsgTgReadyToRun, 1 second)
           mediaDownloader.foreach { a => msgs.filter(_.getMedia != null).foreach(m => a ! m.getMedia) }
-          DBHandler.addMessages(msgs.iterator)(context.dispatcher)
+          DBHandler.addMessages(msgs.iterator)
           if (msgs.nonEmpty) tasks.enqueue(MsgTgGetMessages(chanId, offset + msgs.length))
         } else self ! MsgTgReadyToRun
     }

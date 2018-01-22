@@ -1,6 +1,6 @@
 package tglogger.db
 
-import scala.concurrent._, ExecutionContext.Implicits.global, duration._
+import scala.concurrent._, duration._
 
 import scalikejdbc._
 import scalikejdbc.async._
@@ -13,9 +13,9 @@ object Schema {
             id INTEGER NOT NULL,
             title TEXT NOT NULL,
             username TEXT NULL,
+            supergroup BOOLEAN NOT NULL,
 
             pub BOOLEAN NOT NULL DEFAULT FALSE,
-            available BOOLEAN NOT NULL DEFAULT TRUE,
 
             CONSTRAINT channels_pk PRIMARY KEY (id));""",
 
@@ -77,7 +77,15 @@ object Schema {
             media_id BIGINT NOT NULL,
             name TEXT NULL,
             CONSTRAINT documents_pk PRIMARY KEY (id, channel_id),
-            CONSTRAINT messages_fk FOREIGN KEY (id, channel_id) REFERENCES messages(id, channel_id));"""
+            CONSTRAINT messages_fk FOREIGN KEY (id, channel_id) REFERENCES messages(id, channel_id));""",
+
+    sql"""CREATE TABLE users (
+            id INTEGER NOT NULL,
+            username TEXT NULL,
+            firstname TEXT NOT NULL,
+            lastname TEXT NULL,
+            is_bot BOOLEAN NOT NULL,
+            CONSTRAINT users_pk PRIMARY KEY (id));"""
   )
 
   def initSchema(): Unit = {

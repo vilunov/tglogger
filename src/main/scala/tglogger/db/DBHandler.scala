@@ -30,8 +30,15 @@ object DBHandler {
     }
   }
 
+  def addUsers(users: Iterator[TLAbsUser])
+              (implicit cxt: ExecutionContext): Future[Unit] = {
+    AsyncDB.withPool { implicit session =>
+      Future.sequence(users.map(addUser)).map(_ => ())
+    }
+  }
+
   def removeMessages(chanId: Int, msgIds: Iterator[Int])
-                   (implicit cxt: ExecutionContext): Future[Unit] = {
+                    (implicit cxt: ExecutionContext): Future[Unit] = {
     import java.time.Instant
 
     val timestamp: Long = Instant.now.getEpochSecond
@@ -44,12 +51,16 @@ object DBHandler {
     }
   }
 
+  /*
+   * Singular inserts
+   */
+
   def addChannel(chan: TLChannel)
                 (implicit session: AsyncDBSession = AsyncDB.sharedSession, cxt: ExecutionContext): Future[Unit] =
-    sql"""INSERT INTO channels(id, title, username)
-          VALUES(${chan.getId}, ${chan.getTitle}, ${chan.getUsername})
+    sql"""INSERT INTO channels(id, title, username, supergroup)
+          VALUES(${chan.getId}, ${chan.getTitle}, ${chan.getUsername}, ${chan.getMegagroup})
           ON CONFLICT ON CONSTRAINT channels_pk DO UPDATE SET
-          available = true, title = EXCLUDED.title, username = EXCLUDED.username;""".update().future().map(_ => ())
+          title = EXCLUDED.title, username = EXCLUDED.username;""".update().future().map(_ => ())
 
   /**
     * Inserts message data into the database.
@@ -124,6 +135,20 @@ object DBHandler {
       Future.sequence(Seq(futureMsg, futureFwd, futureMedia)).map(_ => ())
     }
   }
+
+  def addUser(user : TLAbsUser)
+                (implicit session: AsyncDBSession = AsyncDB.sharedSession, cxt: ExecutionContext): Future[Unit] =  user match {
+    case u: TLUser =>
+      sql"""INSERT INTO users(id, username, firstname, lastname, is_bot)
+            VALUES (${u.getId}, ${u.getUsername}, ${u.getFirstName}, ${u.getLastName}, ${u.getBot})
+            ON CONFLICT ON CONSTRAINT users_pk DO UPDATE SET
+            username = EXCLUDED.username, firstname = EXCLUDED.firstname, lastname = EXCLUDED.lastname;""".update().future().map(_ => ())
+    case _ => Future.unit
+  }
+
+  /*
+   * Getters and setters
+   */
 
   def getPubChannelsIds(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[Seq[Int]] =
     sql"SELECT id FROM channels WHERE pub AND available;".map(_.int(1))
