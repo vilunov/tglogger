@@ -3,7 +3,6 @@ package tglogger
 import scala.concurrent._, duration._
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-import scala.annotation.tailrec
 
 import akka.actor.{Actor, ActorRef, Props, Timers}
 
@@ -29,7 +28,7 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
   private val mediaDownloader: Option[ActorRef] =
     if (DownloadMedia) Some(context.actorOf(Props(new TgMediaDownloader(client.getDownloaderClient))))
     else None
-  private val chans: mutable.HashMap[Int, TLChannel] = mutable.HashMap()
+  private var chans: Map[Int, TLChannel] = Map.empty
   private val tasks: mutable.Queue[TgTask] = mutable.Queue()
   private var readyToSend: Boolean = true
 
@@ -69,31 +68,6 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
   def getChannels: Iterator[TLChannel] =
     chans.valuesIterator
 
-  /**
-    * Get messages from a channel
-    *
-    * @param chanId channel to query messages from
-    * @param minId the returned messages will be limited by this value (i.e. their ids will not be lower than `minId`)
-    * @param maxId upper bound of returned messages' ids
-    * @param limit maximum number of returned messages (limited by 100)
-    * @return sequence of messages
-    */
-  @tailrec final def getMessages(chanId: Int, minId: Int = 0, maxId: Int = 0, limit: Int = 100, offset: Int = 0, tries: Int = 3): Seq[TLAbsMessage] = {
-    try {
-      val response = client.messagesGetHistory(chans(chanId), 0, 0, offset, limit min 100, maxId, minId)
-      DBHandler.addUsers(response.getUsers.iterator().asScala)
-      response.getMessages.toArray.collect { case m: TLAbsMessage => m }
-    }
-    catch {
-      case e: RpcErrorException if tries <= 0 => throw e
-      case e: RpcErrorException =>
-        println(s"Thrown RpcErrorException in getMessages\n" +
-          s"(cha0Id = $chanId, minId = $minId, maxId = $maxId, limit = $limit, offset = $offset, tries = $tries)")
-        e.printStackTrace()
-        getMessages(chanId, minId, maxId, limit, offset, tries - 1);
-    }
-  }
-
   override def receive: Receive = {
     case task: TgTask =>
       if(tasks.isEmpty && readyToSend) handleTask(task)
@@ -114,18 +88,20 @@ class TgHandler(private val session: TgSession = new TgSession()) extends Actor 
     task match {
       case MsgTgUpdateChannels =>
         // Retrieve the list of channels, add them to the local map and insert into the DB
-        val channels = client.messagesGetAllChats(new TLIntVector).getChats.toArray().toSeq
-          .collect { case m: TLChannel => m }
-        chans ++= channels.map { chan => chan.getId -> chan }
-        DBHandler.addChannels(chans.values.iterator)
+        val channels = client.messagesGetAllChats(new TLIntVector).getChats.asScala.collect { case m: TLChannel => m }
         timers.startSingleTimer(CooldownTimerKey, MsgTgReadyToRun, 1 second)
+        chans = Map(channels.map { chan => chan.getId -> chan }: _*)
+        DBHandler.addChannels(chans.values.iterator)
       case MsgTgGetMessages(chanId, offset) =>
         if(chans.contains(chanId)) {
-          val msgs = getMessages(chanId, offset = offset).collect { case m: TLMessage => m }
+          val response = client.messagesGetHistory(chans(chanId), offset, 0, 0, 100, 0, 0)
           timers.startSingleTimer(CooldownTimerKey, MsgTgReadyToRun, 1 second)
-          mediaDownloader.foreach { a => msgs.filter(_.getMedia != null).foreach(m => a ! m.getMedia) }
+          val msgs: Seq[TLMessage] = response.getMessages.asScala.collect { case m: TLMessage => m }
+          val usrs: Seq[TLAbsUser] = response.getUsers.asScala
+          mediaDownloader.foreach { a => msgs.filter(_.getMedia != null).foreach(a ! _.getMedia) }
           DBHandler.addMessages(msgs.iterator)
-          if (msgs.nonEmpty) tasks.enqueue(MsgTgGetMessages(chanId, offset + msgs.length))
+          DBHandler.addUsers(usrs.iterator)
+          if (msgs.nonEmpty) tasks.enqueue(MsgTgGetMessages(chanId, msgs.minBy(_.getId).getId))
         } else self ! MsgTgReadyToRun
     }
   }
@@ -221,7 +197,7 @@ case object MsgTgGetAllMessages
   * Retrieve up to 100 channel's messages from the server and insert them into the DB.
   *
   * @param chanId channel's id
-  * @param offset the offset from the last message (must be >= 0)
+  * @param offset the id offset, acts as an upper limit for the returned messages
   */
 case class MsgTgGetMessages(chanId: Int, offset: Int) extends TgTask {
   require(offset >= 0, "offset has to be bigger or equal to 0")

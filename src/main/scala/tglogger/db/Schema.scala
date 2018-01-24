@@ -9,6 +9,17 @@ import tglogger.Vars.DB._
 
 object Schema {
   private val schema = Seq(
+    /*
+     * - pub (boolean) - should the channel be visible to the people
+     * This is used by the queries for the API interface for limiting the available set of channels
+     *
+     * - oldest/newest (ids) - the inclusive interval of messages which are guaranteed to be full and fully correct
+     * The messages older than the `oldest` should be queried for,
+     * unless `oldest` is null and `newest` is not null, which means that no older messages exist
+     * Messages should be retrieved until `newest` each startup. `newest` can't be
+     * `newest` must be at least three days away from the current time, because messages can be edited for up to three days
+     */
+
     sql"""CREATE TABLE channels (
             id INTEGER NOT NULL,
             title TEXT NOT NULL,
@@ -16,6 +27,8 @@ object Schema {
             supergroup BOOLEAN NOT NULL,
 
             pub BOOLEAN NOT NULL DEFAULT FALSE,
+            newest INTEGER NULL DEFAULT NULL,
+            oldest INTEGER NULL DEFAULT NULL,
 
             CONSTRAINT channels_pk PRIMARY KEY (id));""",
 
