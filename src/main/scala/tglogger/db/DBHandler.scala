@@ -12,6 +12,8 @@ import tglogger.Vars.DB._
 import tglogger.entities._
 
 object DBHandler {
+  private lazy val chan = Channel.syntax("chan")
+
   def connect(): Unit = {
     AsyncConnectionPool.singleton(ConnStr, User, Password, AsyncConnectionPoolSettings(maxPoolSize = 8, maxQueueSize = 1024))
   }
@@ -151,11 +153,18 @@ object DBHandler {
    */
 
   def getPubChannelsIds(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[Seq[Int]] =
-    sql"SELECT id FROM channels WHERE pub;".map(_.int(1))
+    withSQL {
+      select(chan.result.id)
+        .from(Channel as chan)
+        .where.append(sqls"pub")
+    }.map(_.int(1)).list().future()
 
-  def getPubChannels(implicit session: AsyncDBSession = AsyncDB.sharedSession): Future[Seq[Channel]] =
-    sql"SELECT id, title, username FROM channels WHERE pub ORDER BY id;"
-      .map { it => Channel(it.int(1), it.string(2), it.stringOpt(3)) }
+  def getPubChannels(implicit session: AsyncDBSession = AsyncDB.sharedSession, cxt: ExecutionContext): Future[Seq[Channel]] =
+    withSQL {
+      select
+        .from(Channel as chan)
+        .where.append(sqls"pub")
+    }.map(Channel(chan)).list().future()
 
   def getMessages(channel: Int, fromId: Int = 1)
                  (implicit session: AsyncDBSession = AsyncDB.sharedSession, cxt: ExecutionContext): Future[List[Message]] = {

@@ -32,9 +32,9 @@ object Main extends App {
   implicit val materializer: ActorMaterializer = ActorMaterializer()
   implicit val execContext: ExecutionContextExecutor = system.dispatcher
 
-  implicit val channelFormat: RootJsonFormat[Channel] = jsonFormat3(Channel)
-  implicit val historyEntryFormat: RootJsonFormat[HistoryEntry] = jsonFormat2(HistoryEntry)
-  implicit val messageFormat: RootJsonFormat[Message] = jsonFormat6(Message)
+  implicit val channelFormat: RootJsonFormat[Channel] = jsonFormat3(Channel.apply)
+  implicit val historyEntryFormat: RootJsonFormat[HistoryEntry] = jsonFormat2(HistoryEntry.apply)
+  implicit val messageFormat: RootJsonFormat[Message] = jsonFormat6(Message.apply)
 
   val route: Route =
     get {

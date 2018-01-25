@@ -95,7 +95,7 @@ object Schema {
     sql"""CREATE TABLE users (
             id INTEGER NOT NULL,
             username TEXT NULL,
-            firstname TEXT NOT NULL,
+            firstname TEXT NULL,
             lastname TEXT NULL,
             is_bot BOOLEAN NOT NULL,
             CONSTRAINT users_pk PRIMARY KEY (id));"""
